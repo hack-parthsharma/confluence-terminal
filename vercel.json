@@ -7,11 +7,5 @@
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/$1" },
     { "src": "/(.*)", "dest": "/public/$1" }
-  ],
-  "env": {
-    "ANGEL_CLIENT_ID": "@angel-client-id",
-    "ANGEL_API_KEY": "@angel-api-key",
-    "ANGEL_PIN": "@angel-pin",
-    "ANGEL_TOTP_SECRET": "@angel-totp-secret"
-  }
+  ]
 }
