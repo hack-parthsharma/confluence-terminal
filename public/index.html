@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Confluence Terminal — Real-Time</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#04040a;--bg2:#0a0a14;--border:rgba(255,255,255,0.04);--text:rgba(255,255,255,0.6);--text2:rgba(255,255,255,0.25);--green:#06d6a0;--red:#ef476f;--blue:#118ab2;--purple:#7c6ef0;--amber:#ffd166;--f:'IBM Plex Mono','Fira Code',monospace;--fd:'Manrope','DM Sans',sans-serif}
+body{background:var(--bg);color:#c8c8d0;font-family:var(--f);overflow:hidden;height:100vh}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.06);border-radius:2px}
+@keyframes live{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{box-shadow:0 0 6px rgba(6,214,160,.2)}50%{box-shadow:0 0 16px rgba(6,214,160,.5)}}
+input::placeholder{color:rgba(255,255,255,0.2)}input:focus{outline:none}
+
+/* Layout */
+.header{padding:10px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);background:rgba(4,4,10,0.98);position:sticky;top:0;z-index:100}
+.main{display:flex;height:calc(100vh - 46px)}
+.sidebar{width:200px;min-width:200px;border-right:1px solid var(--border);display:flex;flex-direction:column;background:rgba(255,255,255,0.006)}
+.center{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.right{width:260px;min-width:260px;border-left:1px solid var(--border);display:flex;flex-direction:column;background:rgba(255,255,255,0.005)}
+
+/* Watchlist */
+.wl-item{padding:8px 10px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.02);transition:background .15s;display:flex;align-items:center;justify-content:space-between}
+.wl-item:hover{background:rgba(255,255,255,0.03)}
+.wl-item.act{background:rgba(6,214,160,0.06);border-left:2px solid var(--green)}
+
+/* Buttons */
+.tf-btn{padding:3px 10px;border-radius:4px;border:1px solid transparent;cursor:pointer;font-size:10px;font-family:var(--f);background:rgba(255,255,255,0.02);color:rgba(255,255,255,0.3);transition:all .15s}
+.tf-btn:hover{background:rgba(255,255,255,0.04)}
+.tf-btn.act{background:rgba(6,214,160,0.1);color:var(--green);border-color:rgba(6,214,160,0.2)}
+
+/* Search */
+.sr{padding:8px 14px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.02);transition:background .1s;display:flex;justify-content:space-between;align-items:center}
+.sr:hover{background:rgba(6,214,160,0.06)}
+
+/* Signal log */
+.sig-item{padding:7px 12px;border-bottom:1px solid rgba(255,255,255,0.015);cursor:pointer;transition:background .1s}
+.sig-item:hover{background:rgba(255,255,255,0.02)}
+
+/* Indicator badge */
+.ind-badge{padding:4px 8px;border-radius:5px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);text-align:center}
+
+/* Modal */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center}
+.modal{background:#0c0c18;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:24px;width:400px;max-width:90vw}
+
+/* Responsive */
+@media(max-width:900px){.sidebar{width:160px;min-width:160px}.right{width:220px;min-width:220px}}
+@media(max-width:700px){.sidebar{display:none}.right{display:none}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+/*═══════════════════════════════════════════════════════════════
+  ANGEL ONE SYMBOL TOKENS (from OpenAPIScripMaster.json)
+═══════════════════════════════════════════════════════════════*/
+const WATCHLIST = [
+  { name:"NIFTY 50",   token:"99926000", exchange:"NSE", type:"INDEX", dec:2 },
+  { name:"BANK NIFTY", token:"99926009", exchange:"NSE", type:"INDEX", dec:2 },
+  { name:"SENSEX",     token:"99919000", exchange:"BSE", type:"INDEX", dec:2 },
+  { name:"FIN NIFTY",  token:"99926037", exchange:"NSE", type:"INDEX", dec:2 },
+  { name:"MIDCAP",     token:"99926074", exchange:"NSE", type:"INDEX", dec:2 },
+  { name:"RELIANCE",   token:"2885",  exchange:"NSE", type:"EQ", dec:2 },
+  { name:"TCS",        token:"11536", exchange:"NSE", type:"EQ", dec:2 },
+  { name:"HDFCBANK",   token:"1333",  exchange:"NSE", type:"EQ", dec:2 },
+  { name:"INFY",       token:"1594",  exchange:"NSE", type:"EQ", dec:2 },
+  { name:"SBIN",       token:"3045",  exchange:"NSE", type:"EQ", dec:2 },
+  { name:"ITC",        token:"1660",  exchange:"NSE", type:"EQ", dec:2 },
+];
+
+const SEARCH_STOCKS = [
+  {name:"ICICIBANK",token:"4963",exchange:"NSE",type:"EQ",dec:2},{name:"KOTAKBANK",token:"1922",exchange:"NSE",type:"EQ",dec:2},
+  {name:"TATAMOTORS",token:"3456",exchange:"NSE",type:"EQ",dec:2},{name:"WIPRO",token:"3787",exchange:"NSE",type:"EQ",dec:2},
+  {name:"BAJFINANCE",token:"317",exchange:"NSE",type:"EQ",dec:2},{name:"LT",token:"11483",exchange:"NSE",type:"EQ",dec:2},
+  {name:"MARUTI",token:"10999",exchange:"NSE",type:"EQ",dec:2},{name:"HINDUNILVR",token:"1394",exchange:"NSE",type:"EQ",dec:2},
+  {name:"ADANIENT",token:"25",exchange:"NSE",type:"EQ",dec:2},{name:"BHARTIARTL",token:"10604",exchange:"NSE",type:"EQ",dec:2},
+  {name:"TATASTEEL",token:"3499",exchange:"NSE",type:"EQ",dec:2},{name:"SUNPHARMA",token:"3351",exchange:"NSE",type:"EQ",dec:2},
+  {name:"AXISBANK",token:"5900",exchange:"NSE",type:"EQ",dec:2},{name:"POWERGRID",token:"14977",exchange:"NSE",type:"EQ",dec:2},
+  {name:"NTPC",token:"11630",exchange:"NSE",type:"EQ",dec:2},{name:"ONGC",token:"2475",exchange:"NSE",type:"EQ",dec:2},
+  {name:"COALINDIA",token:"20374",exchange:"NSE",type:"EQ",dec:2},{name:"JSWSTEEL",token:"11723",exchange:"NSE",type:"EQ",dec:2},
+];
+
+const INTERVAL_MAP = {"1":"ONE_MINUTE","5":"FIVE_MINUTE","15":"FIFTEEN_MINUTE","60":"ONE_HOUR"};
+
+/*═══════════════════════════════════════════════════════════════
+  API LAYER
+═══════════════════════════════════════════════════════════════*/
+let cachedJWT = null;
+let jwtExpiry = 0;
+
+async function getJWT() {
+  if (cachedJWT && Date.now() < jwtExpiry) return cachedJWT;
+  try {
+    const r = await fetch("/api/auth");
+    const d = await r.json();
+    if (d.success) { cachedJWT = d.jwtToken; jwtExpiry = Date.now() + 6*60*60*1000; return cachedJWT; }
+    throw new Error(d.error || "Auth failed");
+  } catch(e) { console.error("Auth error:", e); return null; }
+}
+
+async function fetchCandles(item, interval="FIVE_MINUTE") {
+  const jwt = await getJWT();
+  if (!jwt) throw new Error("Not authenticated");
+  const now = new Date();
+  const to = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")} 15:30`;
+  const from = new Date(now); from.setDate(from.getDate()-7);
+  const fromStr = `${from.getFullYear()}-${String(from.getMonth()+1).padStart(2,"0")}-${String(from.getDate()).padStart(2,"0")} 09:15`;
+  const params = new URLSearchParams({token:item.token, exchange:item.exchange, interval, from:fromStr, to, jwt});
+  const r = await fetch(`/api/candles?${params}`);
+  const d = await r.json();
+  if (d.status===true && d.data) {
+    return d.data.map(c => ({time:new Date(c[0]),open:c[1],high:c[2],low:c[3],close:c[4],volume:c[5]}));
+  }
+  throw new Error(d.message || "No candle data");
+}
+
+async function fetchLTP(items) {
+  const jwt = await getJWT();
+  if (!jwt) return {};
+  const byExch = {};
+  items.forEach(i => { if(!byExch[i.exchange]) byExch[i.exchange]=[]; byExch[i.exchange].push(i.token); });
+  const results = {};
+  for (const [exch, tokens] of Object.entries(byExch)) {
+    try {
+      const params = new URLSearchParams({exchange:exch, tokens:tokens.join(","), mode:"LTP", jwt});
+      const r = await fetch(`/api/ltp?${params}`);
+      const d = await r.json();
+      if (d.status && d.data?.fetched) d.data.fetched.forEach(q => { results[q.symbolToken] = q.ltp; });
+    } catch {}
+  }
+  return results;
+}
+
+// Simulated fallback
+function simCandles(base,vol,n=80){const c=[];let p=base;for(let i=0;i<n;i++){const o=p,cl=p+(Math.random()-.48)*vol;const h=Math.max(o,cl)+Math.random()*vol*.5,l=Math.min(o,cl)-Math.random()*vol*.5;const t=new Date();t.setMinutes(t.getMinutes()-(n-i)*5);c.push({time:t,open:o,high:h,low:l,close:cl,volume:Math.round(40000+Math.random()*60000)});p=cl;}return c;}
+const SIM={99926000:[24500,35],99926009:[52800,80],99919000:[81000,120],99926037:[20500,30],99926074:[13200,25],2885:[1250,15],11536:[3800,30],1333:[1650,18],1594:[1500,16],3045:[780,10],1660:[440,5]};
+
+/*═══════════════════════════════════════════════════════════════
+  INDICATORS
+═══════════════════════════════════════════════════════════════*/
+const ema=(d,p)=>{const k=2/(p+1),e=[d[0]];for(let i=1;i<d.length;i++)e.push(d[i]*k+e[i-1]*(1-k));return e;};
+function calcRSI(c,p=14){const r=Array(c.length).fill(50);if(c.length<p+1)return r;let ag=0,al=0;for(let i=1;i<=p;i++){const d=c[i]-c[i-1];d>0?ag+=d:al+=Math.abs(d);}ag/=p;al/=p;r[p]=al===0?100:100-100/(1+ag/al);for(let i=p+1;i<c.length;i++){const d=c[i]-c[i-1];ag=(ag*(p-1)+(d>0?d:0))/p;al=(al*(p-1)+(d<0?Math.abs(d):0))/p;r[i]=al===0?100:100-100/(1+ag/al);}return r;}
+function calcMACD(c){const e12=ema(c,12),e26=ema(c,26),ml=e12.map((v,i)=>v-e26[i]),sl=ema(ml,9);return{macdLine:ml,signalLine:sl,histogram:ml.map((v,i)=>v-sl[i])};}
+function calcVWAP(cd){let cv=0,cq=0;return cd.map(c=>{const tp=(c.high+c.low+c.close)/3;cv+=tp*c.volume;cq+=c.volume;return cq===0?c.close:cv/cq;});}
+function calcST(cd,p=10,m=3){const st=[],dir=[],atr=[];for(let i=0;i<cd.length;i++){if(i===0){atr.push(cd[0].high-cd[0].low);st.push(cd[0].close);dir.push(1);continue;}const tr=Math.max(cd[i].high-cd[i].low,Math.abs(cd[i].high-cd[i-1].close),Math.abs(cd[i].low-cd[i-1].close));atr.push(i<p?tr:(atr[i-1]*(p-1)+tr)/p);const hl=(cd[i].high+cd[i].low)/2;const ub=hl+m*atr[i],lb=hl-m*atr[i];if(cd[i].close>(st[i-1]||0)){st.push(Math.max(lb,st[i-1]||lb));dir.push(1);}else{st.push(Math.min(ub,st[i-1]||ub));dir.push(-1);}}return{supertrend:st,direction:dir};}
+
+function analyze(candles){
+  if(candles.length<30)return null;
+  const cl=candles.map(c=>c.close),e9=ema(cl,9),e21=ema(cl,21),rsiData=calcRSI(cl),macdData=calcMACD(cl),vwapData=calcVWAP(candles),stData=calcST(candles);
+  const signals=candles.map((c,i)=>{
+    if(i<26)return{type:null,strength:0,reasons:[]};
+    let bull=0,bear=0;const reasons=[];
+    if(e9[i]>e21[i]&&e9[i-1]<=e21[i-1]){bull+=2;reasons.push("EMA×▲");}else if(e9[i]>e21[i]){bull+=1;reasons.push("EMA+");}
+    if(e9[i]<e21[i]&&e9[i-1]>=e21[i-1]){bear+=2;reasons.push("EMA×▼");}else if(e9[i]<e21[i]){bear+=1;reasons.push("EMA−");}
+    if(rsiData[i]<30){bull+=1.5;reasons.push("RSI<30");}else if(rsiData[i]<40){bull+=.5;reasons.push("RSI<40");}
+    if(rsiData[i]>70){bear+=1.5;reasons.push("RSI>70");}else if(rsiData[i]>60){bear+=.5;reasons.push("RSI>60");}
+    if(macdData.histogram[i]>0&&macdData.histogram[i-1]<=0){bull+=1.5;reasons.push("MACD▲");}else if(macdData.histogram[i]>0){bull+=.5;reasons.push("MACD+");}
+    if(macdData.histogram[i]<0&&macdData.histogram[i-1]>=0){bear+=1.5;reasons.push("MACD▼");}else if(macdData.histogram[i]<0){bear+=.5;reasons.push("MACD−");}
+    if(c.close>vwapData[i]){bull+=1;reasons.push(">VWAP");}if(c.close<vwapData[i]){bear+=1;reasons.push("<VWAP");}
+    if(stData.direction[i]===1&&stData.direction[i-1]===-1){bull+=2;reasons.push("ST▲");}else if(stData.direction[i]===1){bull+=1;reasons.push("ST+");}
+    if(stData.direction[i]===-1&&stData.direction[i-1]===1){bear+=2;reasons.push("ST▼");}else if(stData.direction[i]===-1){bear+=1;reasons.push("ST−");}
+    if(bull>=3.5&&bull>bear+1)return{type:"BUY",strength:Math.min(bull/7,1),reasons:reasons.filter(r=>!r.includes("−")&&!r.includes("▼")&&!r.includes("<VWAP")&&!r.includes(">70")&&!r.includes(">60"))};
+    if(bear>=3.5&&bear>bull+1)return{type:"SELL",strength:Math.min(bear/7,1),reasons:reasons.filter(r=>!r.includes("+")&&!r.includes("▲")&&!r.includes(">VWAP")&&!r.includes("<30")&&!r.includes("<40"))};
+    return{type:null,strength:0,reasons:[]};
+  });
+  return{signals,ema9:e9,ema21:e21,rsi:rsiData,macd:macdData,vwap:vwapData,supertrend:stData};
+}
+
+/*═══════════════════════════════════════════════════════════════
+  CHART COMPONENT
+═══════════════════════════════════════════════════════════════*/
+function PriceChart({candles,ind,signals,dec}){
+  const ref=useRef(null);const[tip,setTip]=useState(null);
+  useEffect(()=>{
+    const cv=ref.current;if(!cv||!candles.length)return;
+    const ctx=cv.getContext("2d");const dpr=window.devicePixelRatio||1;const rect=cv.getBoundingClientRect();
+    cv.width=rect.width*dpr;cv.height=rect.height*dpr;ctx.scale(dpr,dpr);
+    const W=rect.width,H=rect.height,cT=14,cB=H-26,cH=cB-cT,cL=66,cR=W-8,cW=cR-cL;
+    ctx.clearRect(0,0,W,H);
+    const allP=candles.flatMap(c=>[c.high,c.low]);const mn=Math.min(...allP),mx=Math.max(...allP),rn=mx-mn||1,pd=rn*.06;
+    const yS=v=>cT+cH*(1-(v-mn+pd)/(rn+pd*2)),xS=i=>cL+(i/Math.max(candles.length-1,1))*cW;
+    // Grid
+    for(let i=0;i<=4;i++){const y=cT+(cH/4)*i;ctx.strokeStyle="rgba(255,255,255,0.025)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(cL,y);ctx.lineTo(cR,y);ctx.stroke();const p=mx+pd-((rn+pd*2)/4)*i;ctx.fillStyle="rgba(255,255,255,0.22)";ctx.font="9px monospace";ctx.textAlign="right";ctx.fillText(p.toFixed(dec),cL-5,y+3);}
+    // Indicator lines
+    const drawL=(data,col,w=1.1,dash=[])=>{if(!data?.length)return;ctx.strokeStyle=col;ctx.lineWidth=w;ctx.setLineDash(dash);ctx.beginPath();data.forEach((v,i)=>{i===0?ctx.moveTo(xS(i),yS(v)):ctx.lineTo(xS(i),yS(v));});ctx.stroke();ctx.setLineDash([]);};
+    if(ind){drawL(ind.ema9,"#06d6a0",1.2);drawL(ind.ema21,"#ef476f",1.2);drawL(ind.vwap,"rgba(255,209,102,0.35)",1,[3,3]);
+    if(ind.supertrend?.supertrend){for(let i=1;i<ind.supertrend.supertrend.length;i++){ctx.strokeStyle=ind.supertrend.direction[i]===1?"rgba(6,214,160,0.5)":"rgba(239,71,111,0.5)";ctx.lineWidth=1.8;ctx.beginPath();ctx.moveTo(xS(i-1),yS(ind.supertrend.supertrend[i-1]));ctx.lineTo(xS(i),yS(ind.supertrend.supertrend[i]));ctx.stroke();}}}
+    // Candles
+    const cWid=Math.max(1.5,cW/candles.length*.5);candles.forEach((c,i)=>{const x=xS(i),bull=c.close>=c.open;const bT=yS(Math.max(c.open,c.close)),bB=yS(Math.min(c.open,c.close));ctx.strokeStyle=bull?"#06d6a0":"#ef476f";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,yS(c.high));ctx.lineTo(x,yS(c.low));ctx.stroke();ctx.fillStyle=bull?"#06d6a0":"#ef476f";ctx.fillRect(x-cWid/2,bT,cWid,Math.max(1,bB-bT));});
+    // Signals
+    if(signals)signals.forEach((s,i)=>{if(!s.type)return;const x=xS(i),buy=s.type==="BUY";const y=buy?yS(candles[i].low)+14:yS(candles[i].high)-14;ctx.save();ctx.beginPath();if(buy){ctx.moveTo(x,y-9);ctx.lineTo(x-6,y+2);ctx.lineTo(x+6,y+2);}else{ctx.moveTo(x,y+9);ctx.lineTo(x-6,y-2);ctx.lineTo(x+6,y-2);}ctx.closePath();ctx.fillStyle=buy?"#06d6a0":"#ef476f";ctx.shadowColor=buy?"#06d6a0":"#ef476f";ctx.shadowBlur=10;ctx.fill();ctx.restore();});
+    // Time axis
+    ctx.fillStyle="rgba(255,255,255,0.18)";ctx.font="8px monospace";ctx.textAlign="center";const step=Math.max(1,Math.floor(candles.length/8));for(let i=0;i<candles.length;i+=step){const t=candles[i].time;ctx.fillText(`${t.getDate()}/${t.getMonth()+1} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`,xS(i),cB+14);}
+    cv.onmousemove=e=>{const br=cv.getBoundingClientRect();const idx=Math.round(((e.clientX-br.left-cL)/cW)*(candles.length-1));if(idx>=0&&idx<candles.length)setTip({x:e.clientX-br.left,y:e.clientY-br.top,idx});};
+    cv.onmouseleave=()=>setTip(null);
+  },[candles,ind,signals,dec]);
+  const c=tip?candles[tip.idx]:null;const sig=tip&&signals?signals[tip.idx]:null;
+  return React.createElement("div",{style:{position:"relative",width:"100%",height:"100%"}},
+    React.createElement("canvas",{ref,style:{width:"100%",height:"100%",display:"block",cursor:"crosshair"}}),
+    tip&&c&&React.createElement("div",{style:{position:"absolute",left:Math.min(tip.x+12,400),top:Math.max(tip.y-80,4),background:"rgba(8,8,18,0.97)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:8,padding:"8px 12px",pointerEvents:"none",zIndex:50,fontFamily:"monospace",fontSize:10,color:"#aaa",backdropFilter:"blur(8px)",minWidth:155}},
+      React.createElement("div",{style:{color:"#fff",fontWeight:600,fontSize:11,marginBottom:3}},`${c.time.getDate()}/${c.time.getMonth()+1} ${String(c.time.getHours()).padStart(2,"0")}:${String(c.time.getMinutes()).padStart(2,"0")}`),
+      React.createElement("div",null,`O:${c.open.toFixed(dec)} H:${c.high.toFixed(dec)}`),
+      React.createElement("div",null,`L:${c.low.toFixed(dec)} C:${c.close.toFixed(dec)}`),
+      React.createElement("div",{style:{color:"rgba(255,255,255,0.25)"}},`Vol: ${(c.volume||0).toLocaleString("en-IN")}`),
+      sig?.type&&React.createElement("div",{style:{marginTop:4,color:sig.type==="BUY"?"#06d6a0":"#ef476f",fontWeight:700}},`⚡ ${sig.type} (${(sig.strength*100).toFixed(0)}%)`)
+    )
+  );
+}
+
+/*═══════════════════════════════════════════════════════════════
+  MINI RSI/MACD CHART
+═══════════════════════════════════════════════════════════════*/
+function MiniChart({data,isRSI,h=60}){
+  const ref=useRef(null);
+  useEffect(()=>{
+    const cv=ref.current;if(!cv||!data?.length)return;const ctx=cv.getContext("2d");const dpr=window.devicePixelRatio||1;const rect=cv.getBoundingClientRect();cv.width=rect.width*dpr;cv.height=h*dpr;ctx.scale(dpr,dpr);const W=rect.width;ctx.clearRect(0,0,W,h);
+    if(isRSI){ctx.fillStyle="rgba(239,71,111,0.04)";ctx.fillRect(0,0,W,h*.3);ctx.fillStyle="rgba(6,214,160,0.04)";ctx.fillRect(0,h*.7,W,h*.3);[30,50,70].forEach(v=>{const y=h*(1-v/100);ctx.strokeStyle="rgba(255,255,255,0.04)";ctx.setLineDash([2,3]);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.setLineDash([]);});ctx.strokeStyle="#7c6ef0";ctx.lineWidth=1.3;ctx.beginPath();data.forEach((v,i)=>{const x=(i/(data.length-1))*W,y=h*(1-v/100);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});ctx.stroke();}
+    else{const maxV=Math.max(...data.map(Math.abs))||1;const mid=h/2;ctx.strokeStyle="rgba(255,255,255,0.04)";ctx.beginPath();ctx.moveTo(0,mid);ctx.lineTo(W,mid);ctx.stroke();const bW=Math.max(1.5,W/data.length*.6);data.forEach((v,i)=>{const x=(i/(data.length-1))*W,bH=(Math.abs(v)/maxV)*(h/2-3);ctx.fillStyle=v>=0?"rgba(6,214,160,0.5)":"rgba(239,71,111,0.5)";ctx.fillRect(x-bW/2,v>=0?mid-bH:mid,bW,bH);});}
+  },[data,isRSI,h]);
+  return React.createElement("canvas",{ref,style:{width:"100%",height:h,display:"block"}});
+}
+
+/*═══════════════════════════════════════════════════════════════
+  MAIN APP
+═══════════════════════════════════════════════════════════════*/
+function App(){
+  const[watchlist,setWatchlist]=useState(WATCHLIST);
+  const[active,setActive]=useState(WATCHLIST[0]);
+  const[chartData,setChartData]=useState({candles:[],analysis:null});
+  const[allSignals,setAllSignals]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[source,setSource]=useState("connecting...");
+  const[countdown,setCountdown]=useState(30);
+  const[searchQ,setSearchQ]=useState("");
+  const[searchRes,setSearchRes]=useState([]);
+  const[searchOpen,setSearchOpen]=useState(false);
+  const[tf,setTf]=useState("5");
+  const searchRef=useRef(null);
+
+  const loadChart=useCallback(async(item)=>{
+    setLoading(true);
+    try{
+      const candles=await fetchCandles(item,INTERVAL_MAP[tf]||"FIVE_MINUTE");
+      if(candles.length>0){const a=analyze(candles);setChartData({candles,analysis:a});setSource("ANGEL ONE LIVE");
+        if(a){const sigs=[];a.signals.forEach((s,i)=>{if(s.type)sigs.push({...s,symbol:item.name,token:item.token,price:candles[i].close,time:candles[i].time,index:i});});
+        setAllSignals(prev=>{const existing=prev.filter(p=>p.token!==item.token);return[...sigs.reverse(),...existing].slice(0,60);});}
+        setLoading(false);return;}
+    }catch(e){console.log("Angel One failed:",e.message);}
+    // Fallback
+    const s=SIM[item.token]||[1000,10];const candles=simCandles(s[0],s[1],80);const a=analyze(candles);
+    setChartData({candles,analysis:a});setSource("SIMULATED");
+    if(a){const sigs=[];a.signals.forEach((s,i)=>{if(s.type)sigs.push({...s,symbol:item.name,token:item.token,price:candles[i].close,time:candles[i].time,index:i});});
+    setAllSignals(prev=>{const existing=prev.filter(p=>p.token!==item.token);return[...sigs.reverse(),...existing].slice(0,60);});}
+    setLoading(false);
+  },[tf]);
+
+  useEffect(()=>{loadChart(active);},[active,tf]);
+  useEffect(()=>{setCountdown(30);const iv=setInterval(()=>{setCountdown(p=>{if(p<=1){loadChart(active);return 30;}return p-1;});},1000);return()=>clearInterval(iv);},[active,loadChart]);
+
+  // Search
+  const handleSearch=(q)=>{setSearchQ(q);if(q.length<2){setSearchRes([]);return;}
+    const all=[...WATCHLIST,...SEARCH_STOCKS];setSearchRes(all.filter(s=>s.name.toLowerCase().includes(q.toLowerCase())));};
+
+  const addItem=(item)=>{if(!watchlist.find(w=>w.token===item.token))setWatchlist(prev=>[...prev,item]);setActive(item);setSearchOpen(false);setSearchQ("");setSearchRes([]);};
+
+  useEffect(()=>{const h=e=>{if(searchRef.current&&!searchRef.current.contains(e.target))setSearchOpen(false);};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);},[]);
+
+  const last=chartData.candles[chartData.candles.length-1];const prev=chartData.candles.length>1?chartData.candles[chartData.candles.length-2]:null;
+  const chg=last&&prev?last.close-prev.close:0;const pct=prev?(chg/prev.close)*100:0;
+  const lastRSI=chartData.analysis?.rsi?.slice(-1)[0]||50;const lastMACD=chartData.analysis?.macd?.histogram?.slice(-1)[0]||0;
+  const stDir=chartData.analysis?.supertrend?.direction?.slice(-1)[0];const latestSig=allSignals.find(s=>s.token===active?.token);
+  const dec=active?.dec??2;
+
+  return React.createElement("div",null,
+    // HEADER
+    React.createElement("div",{className:"header"},
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
+        React.createElement("div",{style:{width:28,height:28,borderRadius:6,background:"linear-gradient(135deg,#06d6a0,#118ab2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:"#04040a",fontWeight:800}},"⚡"),
+        React.createElement("div",null,
+          React.createElement("div",{style:{fontFamily:"var(--fd)",fontSize:13,fontWeight:800,color:"#fff",letterSpacing:"-0.03em"}},"CONFLUENCE TERMINAL ",React.createElement("span",{style:{fontSize:9,fontWeight:400,color:"rgba(255,255,255,0.2)"}},"Angel One Real-Time")),
+          React.createElement("div",{style:{fontSize:8.5,color:"rgba(255,255,255,0.2)",letterSpacing:"0.1em"}},"EMA(9,21) + RSI(14) + VWAP + SUPERTREND(10,3) + MACD")
+        )
+      ),
+      // Search
+      React.createElement("div",{ref:searchRef,style:{position:"relative",flex:"0 1 320px"}},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:8,padding:"0 12px"}},
+          React.createElement("span",{style:{color:"rgba(255,255,255,0.2)",fontSize:12,marginRight:8}},"⌕"),
+          React.createElement("input",{value:searchQ,onChange:e=>{handleSearch(e.target.value);setSearchOpen(true);},onFocus:()=>setSearchOpen(true),placeholder:"Search RELIANCE, TCS, INFY...",style:{flex:1,background:"transparent",border:"none",color:"#fff",fontSize:11,fontFamily:"var(--f)",padding:"8px 0"}}),
+          searchQ&&React.createElement("button",{onClick:()=>{setSearchQ("");setSearchRes([]);setSearchOpen(false);},style:{background:"none",border:"none",color:"rgba(255,255,255,0.2)",cursor:"pointer",fontSize:12}},"✕")
+        ),
+        searchOpen&&searchRes.length>0&&React.createElement("div",{style:{position:"absolute",top:"110%",left:0,right:0,background:"rgba(12,12,20,0.98)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:8,maxHeight:280,overflowY:"auto",zIndex:200}},
+          searchRes.map((r,i)=>React.createElement("div",{key:i,className:"sr",onClick:()=>addItem(r)},
+            React.createElement("div",null,React.createElement("div",{style:{fontSize:11,fontWeight:600,color:"#fff"}},r.name),React.createElement("div",{style:{fontSize:9,color:"rgba(255,255,255,0.25)"}},r.exchange," · ",r.type)),
+            React.createElement("span",{style:{fontSize:8,color:"#06d6a0",padding:"2px 6px",borderRadius:4,background:"rgba(6,214,160,0.1)"}},"LIVE")
+          ))
+        )
+      ),
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:12}},
+        React.createElement("div",{style:{fontSize:9,color:"rgba(255,255,255,0.15)"}},countdown,"s"),
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:5}},
+          React.createElement("div",{style:{width:6,height:6,borderRadius:"50%",background:source==="ANGEL ONE LIVE"?"#06d6a0":source==="SIMULATED"?"#ffd166":"#888",animation:"live 2s infinite"}}),
+          React.createElement("span",{style:{fontSize:9,color:source==="ANGEL ONE LIVE"?"rgba(6,214,160,0.7)":"rgba(255,209,102,0.6)"}},source)
+        )
+      )
+    ),
+
+    // MAIN
+    React.createElement("div",{className:"main"},
+      // LEFT SIDEBAR
+      React.createElement("div",{className:"sidebar"},
+        React.createElement("div",{style:{padding:"8px 10px",borderBottom:"1px solid var(--border)",fontSize:9,color:"var(--text2)",letterSpacing:"0.1em",fontWeight:500}},"WATCHLIST · ",watchlist.length),
+        React.createElement("div",{style:{flex:1,overflowY:"auto"}},
+          watchlist.map(item=>React.createElement("div",{key:item.token+item.name,className:`wl-item ${active?.token===item.token&&active?.name===item.name?"act":""}`,onClick:()=>setActive(item)},
+            React.createElement("div",{style:{flex:1}},
+              React.createElement("div",{style:{fontSize:10.5,fontWeight:active?.token===item.token?600:400,color:active?.token===item.token?"#fff":"var(--text)"}},item.name),
+              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginTop:2}},
+                React.createElement("span",{style:{fontSize:7.5,color:"var(--text2)",padding:"1px 4px",borderRadius:3,border:"1px solid rgba(255,255,255,0.05)"}},item.type==="INDEX"?"IDX":item.exchange)
+              )
+            )
+          ))
+        )
+      ),
+
+      // CENTER
+      React.createElement("div",{className:"center"},
+        // Chart header
+        React.createElement("div",{style:{padding:"10px 16px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}},
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:14}},
+            React.createElement("div",null,
+              React.createElement("div",{style:{fontFamily:"var(--fd)",fontSize:18,fontWeight:800,color:"#fff",letterSpacing:"-0.03em"}},active?.name," ",React.createElement("span",{style:{fontSize:11,fontWeight:400,color:"rgba(255,255,255,0.15)"}},active?.token)),
+              React.createElement("div",{style:{display:"flex",alignItems:"baseline",gap:10,marginTop:2}},
+                React.createElement("span",{style:{fontFamily:"var(--fd)",fontSize:24,fontWeight:700,color:"#fff"}},last?"₹"+last.close.toFixed(dec):"—"),
+                React.createElement("span",{style:{fontSize:13,fontWeight:600,color:chg>=0?"var(--green)":"var(--red)"}},chg>=0?"▲":"▼"," ",Math.abs(chg).toFixed(dec)," (",pct>=0?"+":"",pct.toFixed(2),"%)")
+              )
+            ),
+            latestSig&&React.createElement("div",{style:{padding:"6px 14px",borderRadius:8,animation:"pulse 2s infinite",background:latestSig.type==="BUY"?"rgba(6,214,160,0.1)":"rgba(239,71,111,0.1)",border:`1px solid ${latestSig.type==="BUY"?"rgba(6,214,160,0.25)":"rgba(239,71,111,0.25)"}`}},
+              React.createElement("div",{style:{fontSize:8,color:"rgba(255,255,255,0.25)",letterSpacing:"0.08em"}},"SIGNAL"),
+              React.createElement("div",{style:{fontFamily:"var(--fd)",fontSize:14,fontWeight:700,color:latestSig.type==="BUY"?"var(--green)":"var(--red)"}},latestSig.type," @ ₹",latestSig.price.toFixed(dec))
+            )
+          ),
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
+            React.createElement("div",{style:{display:"flex",gap:6}},
+              [{l:"RSI",v:lastRSI.toFixed(0),c:lastRSI>70?"var(--red)":lastRSI<30?"var(--green)":"var(--purple)"},{l:"MACD",v:lastMACD>0?"+":"−",c:lastMACD>0?"var(--green)":"var(--red)"},{l:"ST",v:stDir===1?"▲":"▼",c:stDir===1?"var(--green)":"var(--red)"}].map((b,i)=>
+                React.createElement("div",{key:i,className:"ind-badge"},React.createElement("div",{style:{fontSize:7.5,color:"var(--text2)"}},b.l),React.createElement("div",{style:{fontSize:12,fontWeight:700,color:b.c}},b.v))
+              )
+            ),
+            React.createElement("div",{style:{display:"flex",gap:3}},
+              [{l:"1m",v:"1"},{l:"5m",v:"5"},{l:"15m",v:"15"},{l:"1h",v:"60"}].map(t=>
+                React.createElement("button",{key:t.v,className:`tf-btn ${tf===t.v?"act":""}`,onClick:()=>setTf(t.v)},t.l)
+              )
+            )
+          )
+        ),
+        // Chart
+        React.createElement("div",{style:{flex:1,display:"flex",flexDirection:"column",minHeight:0}},
+          React.createElement("div",{style:{flex:1,position:"relative",minHeight:200}},
+            loading&&!chartData.candles.length?React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"rgba(255,255,255,0.15)"}},"Loading ",active?.name,"..."):
+            React.createElement(PriceChart,{candles:chartData.candles,ind:chartData.analysis,signals:chartData.analysis?.signals,dec}),
+            React.createElement("div",{style:{position:"absolute",top:6,right:10,display:"flex",gap:8,fontSize:8,color:"rgba(255,255,255,0.2)"}},
+              React.createElement("span",null,React.createElement("span",{style:{color:"#06d6a0"}},"━")," EMA9"),
+              React.createElement("span",null,React.createElement("span",{style:{color:"#ef476f"}},"━")," EMA21"),
+              React.createElement("span",null,React.createElement("span",{style:{color:"rgba(255,209,102,.5)"}},"╌")," VWAP"),
+              React.createElement("span",null,"ST")
+            )
+          ),
+          // Sub-charts
+          React.createElement("div",{style:{display:"flex",borderTop:"1px solid var(--border)"}},
+            React.createElement("div",{style:{flex:1,borderRight:"1px solid var(--border)"}},
+              React.createElement("div",{style:{fontSize:8,color:"rgba(255,255,255,0.15)",padding:"4px 8px",letterSpacing:"0.08em"}},"RSI (14) — ",lastRSI.toFixed(1)),
+              chartData.analysis&&React.createElement(MiniChart,{data:chartData.analysis.rsi,isRSI:true})
+            ),
+            React.createElement("div",{style:{flex:1}},
+              React.createElement("div",{style:{fontSize:8,color:"rgba(255,255,255,0.15)",padding:"4px 8px",letterSpacing:"0.08em"}},"MACD (12,26,9)"),
+              chartData.analysis&&React.createElement(MiniChart,{data:chartData.analysis.macd.histogram,isRSI:false})
+            )
+          )
+        )
+      ),
+
+      // RIGHT — SIGNAL LOG
+      React.createElement("div",{className:"right"},
+        React.createElement("div",{style:{padding:"8px 12px",borderBottom:"1px solid var(--border)",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          React.createElement("span",{style:{fontSize:9,fontWeight:500,color:"var(--text2)",letterSpacing:"0.1em"}},"SIGNAL LOG"),
+          React.createElement("span",{style:{fontSize:8.5,color:"rgba(255,255,255,0.12)"}},allSignals.length)
+        ),
+        React.createElement("div",{style:{padding:"8px 12px",borderBottom:"1px solid var(--border)",background:"rgba(255,255,255,0.01)"}},
+          React.createElement("div",{style:{fontSize:8.5,color:"var(--text2)",marginBottom:4,letterSpacing:"0.06em"}},"STRATEGY"),
+          React.createElement("div",{style:{fontSize:9,color:"rgba(255,255,255,0.18)",lineHeight:1.6}},
+            React.createElement("span",{style:{color:"var(--green)"}},"▲ BUY")," — 3+ bullish confluences",React.createElement("br"),
+            React.createElement("span",{style:{color:"var(--red)"}},"▼ SELL")," — 3+ bearish confluences",React.createElement("br"),
+            React.createElement("span",{style:{color:"rgba(255,255,255,0.3)"}},"SL:")," Supertrend · ",React.createElement("span",{style:{color:"rgba(255,255,255,0.3)"}},"RR:")," 1:1.5 min"
+          )
+        ),
+        React.createElement("div",{style:{flex:1,overflowY:"auto"}},
+          allSignals.length===0&&React.createElement("div",{style:{padding:30,textAlign:"center",color:"rgba(255,255,255,0.1)",fontSize:10}},"Waiting for signals..."),
+          allSignals.map((s,i)=>React.createElement("div",{key:`${s.token}-${s.index}-${i}`,className:"sig-item",style:{animation:`fadeUp .25s ease-out ${Math.min(i*.02,.3)}s both`,background:s.token===active?.token?"rgba(255,255,255,0.015)":"transparent"},onClick:()=>{const item=watchlist.find(w=>w.token===s.token);if(item)setActive(item);}},
+            React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:2}},
+              React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6}},
+                React.createElement("div",{style:{width:18,height:18,borderRadius:4,background:s.type==="BUY"?"rgba(6,214,160,0.1)":"rgba(239,71,111,0.1)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:s.type==="BUY"?"#06d6a0":"#ef476f",fontWeight:700}},s.type==="BUY"?"▲":"▼"),
+                React.createElement("span",{style:{fontSize:10,fontWeight:600,color:s.type==="BUY"?"#06d6a0":"#ef476f"}},s.type),
+                React.createElement("span",{style:{fontSize:9,color:"var(--text2)"}},s.symbol)
+              ),
+              React.createElement("span",{style:{fontSize:10,fontWeight:600,color:"#fff"}},"₹",s.price.toFixed(2))
+            ),
+            React.createElement("div",{style:{display:"flex",justifyContent:"space-between"}},
+              React.createElement("span",{style:{fontSize:7.5,color:"rgba(255,255,255,0.12)"}},`${s.time.getDate()}/${s.time.getMonth()+1} ${String(s.time.getHours()).padStart(2,"0")}:${String(s.time.getMinutes()).padStart(2,"0")}`),
+              React.createElement("span",{style:{fontSize:7.5,color:"rgba(255,255,255,0.12)"}},`${(s.strength*100).toFixed(0)}% · ${s.reasons?.slice(0,2).join(", ")}`)
+            )
+          ))
+        ),
+        React.createElement("div",{style:{padding:"6px 12px",borderTop:"1px solid var(--border)",fontSize:7.5,color:"rgba(255,255,255,0.1)",lineHeight:1.4}},"⚠️ Educational only. Not financial advice. Backtest before live trading. Max 1-2% risk per trade.")
+      )
+    )
+  );
+}
+
+ReactDOM.render(React.createElement(App),document.getElementById("app"));
+</script>
+</body>
+</html>
