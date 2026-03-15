@@ -1,0 +1,11 @@
+{
+  "name": "confluence-terminal",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx serve public -l 3000"
+  },
+  "dependencies": {
+    "otpauth": "^9.3.5"
+  }
+}
